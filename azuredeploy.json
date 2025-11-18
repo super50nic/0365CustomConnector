@@ -34,14 +34,14 @@
         "functionAppName": "[concat(parameters('FunctionAppName'), uniqueString(resourceGroup().id))]",
         "hostingPlanName": "[variables('functionAppName')]",
         "applicationInsightsName": "[variables('functionAppName')]",
-        "storageAccountName": "[variables('functionAppName')]",
+        "storageAccountName": "[toLower(take(replace(replace(replace(concat(parameters('FunctionAppName'), uniqueString(resourceGroup().id)), '_', ''), '-', ''), ' ', ''), 24))]",
         "identityType": "[if(empty(parameters('UserAssignedIdentityResourceId')), 'SystemAssigned', 'SystemAssigned, UserAssigned')]",
         "userAssignedIdentities": "[if(empty(parameters('UserAssignedIdentityResourceId')), json('{}'), json(concat('{\"', parameters('UserAssignedIdentityResourceId'), '\": {}}')))]"
     },
     "resources": [
         {
             "type": "Microsoft.Storage/storageAccounts",
-            "apiVersion": "2023-04-01",
+            "apiVersion": "2023-05-01",
             "name": "[variables('storageAccountName')]",
             "location": "[resourceGroup().location]",
             "sku": {
@@ -75,7 +75,7 @@
         },
         {
             "type": "Microsoft.Web/serverfarms",
-            "apiVersion": "2023-04-01",
+            "apiVersion": "2025-03-01",
             "name": "[variables('hostingPlanName')]",
             "location": "[resourceGroup().location]",
             "sku": {
@@ -103,7 +103,7 @@
         },
         {
             "type": "Microsoft.Web/sites",
-            "apiVersion": "2023-04-01",
+            "apiVersion": "2025-03-01",
             "name": "[variables('functionAppName')]",
             "location": "[resourceGroup().location]",
             "kind": "functionapp",
@@ -128,7 +128,7 @@
                         },
                         {
                             "name": "AzureWebJobsStorage",
-                            "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('storageAccountName'), ';EndpointSuffix=', environment().suffixes.storage, ';AccountKey=',listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2023-04-01').keys[0].value)]"
+                            "value": "[concat('DefaultEndpointsProtocol=https;AccountName=', variables('storageAccountName'), ';EndpointSuffix=', environment().suffixes.storage, ';AccountKey=',listKeys(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), '2023-05-01').keys[0].value)]"
                         },
                         {
                             "name": "FUNCTIONS_EXTENSION_VERSION",
@@ -158,7 +158,7 @@
         },
         "systemAssignedIdentityPrincipalId": {
             "type": "string",
-            "value": "[reference(resourceId('Microsoft.Web/sites', variables('functionAppName')), '2023-04-01', 'Full').identity.principalId]"
+            "value": "[reference(resourceId('Microsoft.Web/sites', variables('functionAppName')), '2025-03-01', 'Full').identity.principalId]"
         },
         "functionAppUrl": {
             "type": "string",
