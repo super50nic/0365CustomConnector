@@ -2,16 +2,19 @@
 
 This Functions App Connector provides HTTP-triggered endpoints to manage Microsoft Defender for Office 365 and Exchange Online security configurations using Managed Identity authentication.
 
-### Authentication Method
+## Technology Stack
 
-* **Azure Managed Identity** (System-Assigned or User-Assigned)
+* **Runtime**: Azure Functions v4 (PowerShell)
+* **PowerShell Module**: ExchangeOnlineManagement v3.x (automatically managed)
+* **Extension Bundle**: Microsoft.Azure.Functions.ExtensionBundle v4.x
+* **Authentication**: Azure Managed Identity (System-Assigned or User-Assigned)
 
-### Prerequisites
+## Prerequisites
 
 * Azure subscription with permissions to create Function Apps and assign Azure AD roles
 * Microsoft 365 tenant with Exchange Online
 * Global Administrator or Privileged Role Administrator access (for role assignment)
-* ExchangeOnlineManagement PowerShell module v3.9 or higher (automatically managed)
+* PowerShell with Microsoft.Graph module (for post-deployment configuration)
 
 ## Actions Supported
 
@@ -28,7 +31,8 @@ This Functions App Connector provides HTTP-triggered endpoints to manage Microso
 | **RemoveAllowBlockListItems** | Remove entries for email addresses from the Tenant Allow/Block List |
 | **ListMalwarePolicy** | View existing malware filter policies |
 | **BlockMalwareFileExtension** | Add file extensions to malware policy block list |
-| **GetInboxRule** | View list of existing rules created in a mailbox |
+| **GetInboxRule** | View list of existing rules created in a mailbox (supports IncludeHidden parameter) |
+| **SetInboxRule** | Enable or disable inbox rules for a mailbox |
 | **RemoveInboxRule** | Remove inbox rule from a particular mailbox |
 
 ---
@@ -82,7 +86,7 @@ After the ARM template deployment completes, upload the function code:
 6. In Kudu, go to **"Tools"** → **"Zip Push Deploy"**
 7. Drag and drop `O365DefenderFunctionApp.zip` into the upload area
 8. Wait for extraction to complete (~30 seconds)
-9. Verify: Go back to Function App → **"Functions"** → You should see all 13 functions listed
+9. Verify: Go back to Function App → **"Functions"** → You should see all 14 functions listed
 
 #### Option B: Using Azure CLI
 
@@ -155,21 +159,35 @@ Write-Host "Exchange Administrator role assigned successfully!"
 
 ### Step 2: Grant API Permissions
 
-The Managed Identity requires the `Exchange.ManageAsApp` API permission.
+The Managed Identity requires the `Exchange.ManageAsApp` API permission. Managed Identities cannot use the Azure Portal UI for permissions, so use PowerShell:
 
-1. In Azure Portal, go to **Azure Active Directory** → **App registrations**
-2. Click **All applications** tab
-3. Search for your Function App name
-4. Click on the app registration
-5. Go to **API permissions** → **+ Add a permission**
-6. Select **APIs my organization uses**
-7. Search for **Office 365 Exchange Online**
-8. Select **Application permissions**
-9. Check **Exchange.ManageAsApp**
-10. Click **Add permissions**
-11. Click **✓ Grant admin consent for [Your Organization]**
+```powershell
+# Connect to Microsoft Graph
+Connect-MgGraph -Scopes "Application.ReadWrite.All", "AppRoleAssignment.ReadWrite.All"
 
-**Important**: Admin consent is required. Without it, the Managed Identity cannot access Exchange Online.
+# Get the Managed Identity Principal ID (from deployment outputs or Step 1)
+$principalId = "PASTE_YOUR_PRINCIPAL_ID_HERE"
+
+# Get the Managed Identity service principal
+$msi = Get-MgServicePrincipal -Filter "id eq '$principalId'"
+
+# Get Office 365 Exchange Online service principal
+$exchangeOnline = Get-MgServicePrincipal -Filter "displayName eq 'Office 365 Exchange Online'"
+
+# Get the Exchange.ManageAsApp role
+$appRole = $exchangeOnline.AppRoles | Where-Object { $_.Value -eq "Exchange.ManageAsApp" }
+
+# Grant the permission
+New-MgServicePrincipalAppRoleAssignment `
+    -ServicePrincipalId $msi.Id `
+    -PrincipalId $msi.Id `
+    -ResourceId $exchangeOnline.Id `
+    -AppRoleId $appRole.Id
+
+Write-Host "Exchange.ManageAsApp permission granted successfully!"
+```
+
+**Important**: This permission grants admin-level access to Exchange Online. Wait 5-15 minutes for propagation before testing.
 
 ---
 
@@ -346,14 +364,33 @@ Content-Type: application/json
 
 ### 7. CreateAllowBlockList
 
+Block sender email addresses, URLs, or file hashes:
+
+**Block email addresses:**
 ```json
 {
     "ListType": "Sender",
-    "Entries": "malicious@attacker.com"
+    "Entries": ["malicious@attacker.com", "spam@bad-domain.com"]
 }
 ```
 
-*Optional: Add `"ExpirationDate": "12/31/2025"` for temporary blocks*
+**Block URLs** (no protocol, no trailing slash):
+```json
+{
+    "ListType": "Url",
+    "Entries": ["malicious-site.com", "phishing-page.net/login"]
+}
+```
+
+**Block file hashes** (SHA256):
+```json
+{
+    "ListType": "FileHash",
+    "Entries": ["9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"]
+}
+```
+
+*Optional: Add `"ExpirationDate": "2025-12-31"` for temporary blocks (format: YYYY-MM-DD)*
 
 ### 8. UpdateAllowBlockList
 
@@ -393,13 +430,50 @@ Content-Type: application/json
 
 ### 12. GetInboxRule
 
+**Get visible rules only:**
 ```json
 {
     "Mailbox": "user@contoso.com"
 }
 ```
 
-### 13. RemoveInboxRule
+**Get all rules (including hidden):**
+```json
+{
+    "Mailbox": "user@contoso.com",
+    "IncludeHidden": true
+}
+```
+
+### 13. SetInboxRule
+
+**Disable a specific rule:**
+```json
+{
+    "Mailbox": "user@contoso.com",
+    "Identity": "Suspicious Rule Name",
+    "Enabled": false
+}
+```
+
+**Enable a specific rule:**
+```json
+{
+    "Mailbox": "user@contoso.com",
+    "Identity": "Legitimate Rule Name",
+    "Enabled": true
+}
+```
+
+**Disable ALL rules for a mailbox:**
+```json
+{
+    "Mailbox": "user@contoso.com",
+    "DisableAll": true
+}
+```
+
+### 14. RemoveInboxRule
 
 ```json
 {
@@ -491,8 +565,34 @@ Expand-Archive O365DefenderFunctionApp.zip -DestinationPath temp -Force; ls temp
 
 **Solution**:
 - Restart the Function App to trigger cold start
-- Check `requirements.psd1` shows `3.9.*`
+- Check `requirements.psd1` shows `'ExchangeOnlineManagement' = '3.*'`
+- Note: PowerShell managed dependencies only support major version wildcards (e.g., `3.*`) not minor versions (e.g., `3.9.*`)
 - Clear Function App cache: Platform features → Advanced Tools → Restart
+
+### Extension Bundle Version Errors
+
+**Cause**: Using deprecated extension bundle v3.
+
+**Solution**:
+- Check `host.json` shows `"version": "[4.*, 5.0.0)"`
+- Extension bundle v3 is deprecated; v4 is the current stable version
+- Rebuild and redeploy if using old package
+
+### URL Blocking Not Working
+
+**Cause**: Invalid URL format in CreateAllowBlockList entries.
+
+**Solution**:
+- **Remove** protocol (`https://` or `http://`)
+- **Remove** trailing slashes
+- **Valid formats**:
+  - `malicious-site.com` - Blocks entire domain
+  - `www.malicious-site.com` - Blocks specific subdomain
+  - `malicious-site.com/path` - Blocks specific path
+- **Invalid formats**:
+  - ❌ `https://malicious-site.com`
+  - ❌ `malicious-site.com/`
+  - ❌ `http://www.malicious-site.com/page.html`
 
 ---
 
